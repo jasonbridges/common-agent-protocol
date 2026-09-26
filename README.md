@@ -27,3 +27,17 @@ git submodule add https://github.com/jasonbridges/common-agent-protocol.git .age
 The consuming repository's root `AGENTS.md` acts as an entry point:
 1. Directs agents to read `.agents/CORE-AGENTS.md`.
 2. Declares repository-specific invariants, architecture constraints, and build/validation commands (e.g. Bazel targets, Nix/systemd configs).
+
+## GitHub App Command Broker
+
+This repository provides a generalized GitHub App Command Broker (`scripts/agent-command-broker.py`) allowing remote or local AI agents to submit tasks, create bot-authored commits, open PRs, and advance task state via declarative markdown envelopes without direct repository write credentials or personal access tokens.
+
+### Configuration
+Consuming repositories can install `.github/workflows/agent-command-broker.yml` (template available in `templates/workflows/agent-command-broker.yml`) and customize environment variables:
+- `AGENT_BROKER_OWNER`: GitHub username or org (defaults to repository owner)
+- `AGENT_BROKER_BOT_NAME`: Committer name (defaults to `jasonbridges-agent[bot]`)
+- `AGENT_BROKER_BOT_EMAIL`: Committer email (defaults to `272212351+jasonbridges-agent[bot]@users.noreply.github.com`)
+- `AGENT_BROKER_BRANCH_PATTERN`: Python format string for branch naming (defaults to `work/issue-{issue}`)
+- `AGENT_BROKER_BRANCH_RE`: Regex pattern for matching managed branches (defaults to `^work/issue-\d+$`)
+- `AGENT_BROKER_PLANNING_ISSUE`: Issue number for planning commands (defaults to repo-specific planning issue or disabled)
+
