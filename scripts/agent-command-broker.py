@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import base64
 import binascii
+import contextlib
 import fnmatch
 import hashlib
 import json
@@ -1044,7 +1045,7 @@ def mutate(gh: GH, req: Request, materialized: dict[str, Any]) -> tuple[int, str
         pr = _create_initial_pr(gh, req)
         number = int(pr["number"])
     except Exception as exc:
-        try:
+        with contextlib.suppress(Exception):
             gh.post(
                 f"/issues/{req.issue}/comments",
                 {"body": (
@@ -1053,8 +1054,6 @@ def mutate(gh: GH, req: Request, materialized: dict[str, Any]) -> tuple[int, str
                     f"Failure class: `{type(exc).__name__}`."
                 )},
             )
-        except Exception:
-            pass
         raise
     gh.post(
         f"/issues/{req.issue}/comments",
@@ -1452,15 +1451,22 @@ def cmd_execute(args: argparse.Namespace) -> int:
 def main() -> int:
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="cmd", required=True)
-    a = sub.add_parser("validate"); a.add_argument("--event", required=True); a.add_argument("--output", required=True); a.set_defaults(fn=cmd_validate)
-    a = sub.add_parser("execute"); a.add_argument("--request", required=True); a.set_defaults(fn=cmd_execute)
+    a = sub.add_parser("validate")
+    a.add_argument("--event", required=True)
+    a.add_argument("--output", required=True)
+    a.set_defaults(fn=cmd_validate)
+    a = sub.add_parser("execute")
+    a.add_argument("--request", required=True)
+    a.set_defaults(fn=cmd_execute)
     args = p.parse_args()
     try:
         return args.fn(args)
     except BrokerError as e:
-        print(f"ERROR: {e}", file=sys.stderr); return 1
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
     except Exception as e:
-        print(f"ERROR: broker failed closed ({type(e).__name__})", file=sys.stderr); return 1
+        print(f"ERROR: broker failed closed ({type(e).__name__})", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
