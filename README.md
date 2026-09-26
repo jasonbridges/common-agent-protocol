@@ -38,6 +38,6 @@ Consuming repositories can install `.github/workflows/agent-command-broker.yml` 
 - `AGENT_BOT_NAME`: Committer name (defaults to `jasonbridges-agent[bot]`)
 - `AGENT_BOT_EMAIL`: Committer email (defaults to `331491158+jasonbridges-agent[bot]@users.noreply.github.com`)
 - `AGENT_BROKER_BRANCH_PATTERN`: Python format string for branch naming (defaults to `work/issue-{issue}`)
-- `AGENT_BROKER_BRANCH_RE`: Regex pattern for matching managed branches (defaults to `^work/issue-\d+$`)
-- `AGENT_BROKER_PLANNING_ISSUE`: Issue number for planning commands (defaults to repo-specific planning issue or disabled)
+- `AGENT_BROKER_BRANCH_RE`: Regex pattern for matching managed branches (defaults to `^work/issue-(\d+)$`)
+- `AGENT_BROKER_PLANNING_ISSUE`: Issue number for planning commands (defaults to repo-specific planning issue or disabled when blank/unset)
 
