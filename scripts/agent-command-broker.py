@@ -42,9 +42,73 @@ BULLET_RE = re.compile(r"^\s*(?:[-*\u2022\u00b7]|\d+[.)])\s+(.+?)\s*$")
 BRANCH_RE = re.compile(os.environ.get("AGENT_BROKER_BRANCH_RE", r"^work/issue-(\d+)$"))
 
 
+def get_repo() -> str:
+    return os.environ.get("GITHUB_REPOSITORY", REPO)
+
+
+def get_owner() -> str:
+    if "AGENT_BROKER_OWNER" in os.environ and os.environ["AGENT_BROKER_OWNER"].strip():
+        return os.environ["AGENT_BROKER_OWNER"].strip()
+    repo = get_repo()
+    if "/" in repo:
+        return repo.split("/")[0]
+    return OWNER
+
+
+def get_bot_name() -> str:
+    return (
+        os.environ.get("AGENT_BOT_NAME")
+        or os.environ.get("AGENT_BROKER_BOT_NAME")
+        or BOT_NAME
+    )
+
+
+def get_bot_email() -> str:
+    return (
+        os.environ.get("AGENT_BOT_EMAIL")
+        or os.environ.get("AGENT_BROKER_BOT_EMAIL")
+        or BOT_EMAIL
+    )
+
+
+def get_branch_re() -> re.Pattern[str]:
+    raw = os.environ.get("AGENT_BROKER_BRANCH_RE")
+    if raw and raw.strip():
+        return re.compile(raw.strip())
+    return BRANCH_RE
+
+
 def branch_for_issue(issue_number: int) -> str:
     pattern = os.environ.get("AGENT_BROKER_BRANCH_PATTERN", "work/issue-{issue}")
     return pattern.format(issue=issue_number)
+
+
+def _init_planning_issue() -> int | None:
+    raw = os.environ.get("AGENT_BROKER_PLANNING_ISSUE")
+    if raw is None:
+        return 377
+    raw = raw.strip()
+    if not raw or raw == "0" or raw.lower() == "disabled":
+        return None
+    try:
+        return int(raw)
+    except ValueError:
+        return None
+
+
+PLANNING_ISSUE = _init_planning_issue()
+
+
+def get_planning_issue() -> int | None:
+    if "AGENT_BROKER_PLANNING_ISSUE" in os.environ:
+        raw = os.environ["AGENT_BROKER_PLANNING_ISSUE"].strip()
+        if not raw or raw == "0" or raw.lower() == "disabled":
+            return None
+        try:
+            return int(raw)
+        except ValueError as exc:
+            raise BrokerError(f"Invalid AGENT_BROKER_PLANNING_ISSUE: {raw!r}") from exc
+    return PLANNING_ISSUE
 
 
 REQUIRED_SECTIONS = ("Issue", "Claim", "Changed paths", "Tests", "Rollback", "SSO impact", "Coordination")
@@ -56,7 +120,6 @@ MAX_BODY = 30_000
 MAX_FILES = 64
 MAX_BLOB = 2 * 1024 * 1024
 MAX_TOTAL = 8 * 1024 * 1024
-PLANNING_ISSUE = int(os.environ.get("AGENT_BROKER_PLANNING_ISSUE", "377"))
 PROVENANCE_PREFIX = "<!-- agent-claim-provenance:v1:"
 PROVENANCE_SUFFIX = " -->"
 V2_OPERATIONS = {
@@ -136,14 +199,14 @@ class GH:
         if not token:
             raise BrokerError("GitHub token is required")
         self.token = token
-        self.root = f"https://api.github.com/repos/{REPO}"
+        self.root = f"https://api.github.com/repos/{get_repo()}"
 
     def call(self, method: str, path: str, payload: Any = None, allow_404: bool = False) -> Any:
         url = path if path.startswith("https://") else self.root + path
         data = None if payload is None else json.dumps(payload, separators=(",", ":")).encode()
         headers = {
             "Accept": "application/vnd.github+json", "Authorization": f"Bearer {self.token}",
-            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": f"{REPO.split('/')[-1]}-agent-command-broker",
+            "X-GitHub-Api-Version": "2022-11-28", "User-Agent": f"{get_repo().split('/')[-1]}-agent-command-broker",
         }
         if data is not None:
             headers["Content-Type"] = "application/json"
@@ -419,8 +482,11 @@ def _parse_v2(payload: dict[str, Any], source_issue: int, comment_id: int, diges
         _sha256_value(payload["request_sha256"], "request_sha256")
 
     if operation.startswith("plan."):
-        if source_issue != PLANNING_ISSUE:
-            raise BrokerError(f"Planning commands must originate from issue #{PLANNING_ISSUE}")
+        planning_num = get_planning_issue()
+        if planning_num is None:
+            raise BrokerError("Planning commands are not configured for this repository")
+        if source_issue != planning_num:
+            raise BrokerError(f"Planning commands must originate from issue #{planning_num}")
     elif _positive_int(payload.get("issue"), "issue") != source_issue:
         raise BrokerError("Work command issue does not match comment issue")
     return V2Command(operation, source_issue, dict(payload), comment_id, digest)
@@ -460,7 +526,8 @@ def from_event(event: dict[str, Any]) -> Command:
         raise BrokerError("Broker accepts commands only on issues")
     if issue.get("state") != "open":
         raise BrokerError("Target issue must be open")
-    if comment.get("user", {}).get("login") != OWNER or comment.get("author_association") != "OWNER":
+    owner = get_owner()
+    if comment.get("user", {}).get("login") != owner or comment.get("author_association") != "OWNER":
         raise BrokerError("Only repository owner comments may invoke the broker")
     body = str(comment.get("body") or "")
     if len(body.encode()) > MAX_COMMENT or not body.startswith(PREFIX):
@@ -665,7 +732,7 @@ def validate_remote(gh: GH, req: Request, *, verify_blobs: bool = True) -> dict[
         other_issue = None
         other_exclusive: set[str] = set()
         reciprocal = False
-        m = BRANCH_RE.fullmatch(branch)
+        m = get_branch_re().fullmatch(branch)
         if m:
             other_issue = int(m.group(1))
             other_body = str(gh.issue(other_issue).get("body") or "")
@@ -733,7 +800,7 @@ def _pr_maps_issue(pr: dict[str, Any], issue: int, branch: str) -> bool:
     if str(pr.get("head", {}).get("ref", "")) != branch:
         return False
     head_repo = pr.get("head", {}).get("repo") or {}
-    if head_repo.get("full_name") != REPO:
+    if head_repo.get("full_name") != get_repo():
         return False
     body = str(pr.get("body") or "")
     return branch in body and bool(
@@ -797,7 +864,7 @@ def _validate_scope_and_collisions(
         other_files = gh.pull_files(number)
         other_exclusive: set[str] = set()
         reciprocal = False
-        match = BRANCH_RE.fullmatch(branch)
+        match = get_branch_re().fullmatch(branch)
         if match:
             other_issue = int(match.group(1))
             other_body = str(gh.issue(other_issue).get("body") or "")
@@ -813,14 +880,17 @@ def _validate_scope_and_collisions(
 
 def _files_for_v2(cmd: V2Command) -> tuple[File, ...]:
     if cmd.operation != "work.update":
-        return tuple()
+        return ()
     return _parse_files(cmd.payload["files"])
 
 
 def validate_planning(gh: GH, cmd: V2Command) -> None:
-    if cmd.source_issue != PLANNING_ISSUE:
-        raise BrokerError(f"Planning commands must originate from issue #{PLANNING_ISSUE}")
-    _open_issue(gh, PLANNING_ISSUE)
+    planning_num = get_planning_issue()
+    if planning_num is None:
+        raise BrokerError("Planning commands are not configured for this repository")
+    if cmd.source_issue != planning_num:
+        raise BrokerError(f"Planning commands must originate from issue #{planning_num}")
+    _open_issue(gh, planning_num)
     payload = cmd.payload
     if cmd.operation == "plan.create_milestone":
         title = str(payload["title"])
@@ -884,7 +954,8 @@ def validate_work_update(
 
 def verify_comment(gh: GH, req: Command) -> None:
     c = gh.get(f"/issues/comments/{req.comment_id}")
-    if not isinstance(c, dict) or c.get("user", {}).get("login") != OWNER or c.get("author_association") != "OWNER":
+    owner = get_owner()
+    if not isinstance(c, dict) or c.get("user", {}).get("login") != owner or c.get("author_association") != "OWNER":
         raise BrokerError("Source comment authorization changed")
     if hashlib.sha256(str(c.get("body") or "").encode()).hexdigest() != req.comment_digest:
         raise BrokerError("Source comment was edited after validation")
@@ -931,9 +1002,10 @@ def _claim_provenance(req: Request) -> dict[str, Any]:
 
 def _claim_body(req: Request) -> str:
     provenance = _encode_record(PROVENANCE_PREFIX, PROVENANCE_SUFFIX, _claim_provenance(req))
+    bot = get_bot_name()
     return (
         "BOT CLAIM\n\n"
-        f"- Agent: `{BOT_NAME}` via trusted command broker\n"
+        f"- Agent: `{bot}` via trusted command broker\n"
         f"- Branch: `{req.branch}`\n"
         f"- Base: `{req.base_sha}`\n"
         "- Intended paths:\n"
@@ -947,10 +1019,11 @@ def _claim_body(req: Request) -> str:
 def _find_claim_provenance(gh: GH, req: Request) -> dict[str, Any]:
     expected = _claim_provenance(req)
     matches_found: list[dict[str, Any]] = []
+    bot = get_bot_name()
     for comment in gh.pages(f"/issues/{req.issue}/comments"):
         if not isinstance(comment, dict):
             continue
-        if comment.get("user", {}).get("login") != BOT_NAME:
+        if comment.get("user", {}).get("login") != bot:
             continue
         body = str(comment.get("body") or "")
         if not body.startswith("BOT CLAIM"):
@@ -976,10 +1049,11 @@ def _advance_ref_idempotent(gh: GH, branch: str, new_sha: str) -> None:
 
 
 def _ensure_reviewer(gh: GH, pr_number: int) -> None:
-    gh.post(f"/pulls/{pr_number}/requested_reviewers", {"reviewers": [OWNER]})
+    owner = get_owner()
+    gh.post(f"/pulls/{pr_number}/requested_reviewers", {"reviewers": [owner]})
     reviewers = gh.get(f"/pulls/{pr_number}/requested_reviewers")
     users = {user.get("login") for user in reviewers.get("users", []) if isinstance(user, dict)}
-    if OWNER not in users:
+    if owner not in users:
         raise BrokerError("Reviewer request verification failed")
 
 
@@ -999,7 +1073,7 @@ def _create_initial_commit(gh: GH, req: Request) -> str:
             ],
         },
     )
-    identity = {"name": BOT_NAME, "email": BOT_EMAIL}
+    identity = {"name": get_bot_name(), "email": get_bot_email()}
     commit = gh.post(
         "/git/commits",
         {
@@ -1055,6 +1129,7 @@ def mutate(gh: GH, req: Request, materialized: dict[str, Any]) -> tuple[int, str
                 )},
             )
         raise
+    owner = get_owner()
     gh.post(
         f"/issues/{req.issue}/comments",
         {"body": (
@@ -1062,7 +1137,7 @@ def mutate(gh: GH, req: Request, materialized: dict[str, Any]) -> tuple[int, str
             f"- Branch: `{req.branch}`\n"
             f"- Commit: `{commit_sha}`\n"
             f"- Pull request: #{number}\n"
-            f"- Reviewer requested: `{OWNER}`"
+            f"- Reviewer requested: `{owner}`"
         )},
     )
     return number, str(pr["html_url"])
@@ -1108,7 +1183,7 @@ def _validate_resumed_head(gh: GH, req: Request, head_sha: str) -> None:
         raise BrokerError("Partial branch commit message does not match original request")
     for role in ("author", "committer"):
         identity = detail.get(role) or {}
-        if identity.get("name") != BOT_NAME or identity.get("email") != BOT_EMAIL:
+        if identity.get("name") != get_bot_name() or identity.get("email") != get_bot_email():
             raise BrokerError("Partial branch commit identity is not the broker bot")
     rows = compare.get("files") or []
     observed = {str(row.get("filename")): row for row in rows if isinstance(row, dict)}
@@ -1257,8 +1332,11 @@ def mutate_planning(gh: GH, cmd: V2Command) -> str:
         result = f"issue #{target} -> milestone #{milestone}"
     else:
         raise BrokerError("Not a planning mutation")
+    planning_num = get_planning_issue()
+    if planning_num is None:
+        raise BrokerError("Planning commands are not configured for this repository")
     gh.post(
-        f"/issues/{PLANNING_ISSUE}/comments",
+        f"/issues/{planning_num}/comments",
         {"body": f"BOT BROKER SUCCESS\n\n- Operation: `{cmd.operation}`\n- Result: {result}"},
     )
     return result
@@ -1281,7 +1359,7 @@ def _work_update_commit(gh: GH, cmd: V2Command, files: tuple[File, ...]) -> str:
             ],
         },
     )
-    identity = {"name": BOT_NAME, "email": BOT_EMAIL}
+    identity = {"name": get_bot_name(), "email": get_bot_email()}
     commit = gh.post(
         "/git/commits",
         {
@@ -1420,7 +1498,8 @@ def request_from_saved(data: dict[str, Any]) -> Request:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
-    if os.environ.get("GITHUB_REPOSITORY", REPO) != REPO:
+    repo = get_repo()
+    if os.environ.get("GITHUB_REPOSITORY", repo) != repo:
         raise BrokerError("Repository mismatch")
     with open(args.event, encoding="utf-8") as handle:
         event = json.load(handle)
@@ -1438,7 +1517,8 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 def cmd_execute(args: argparse.Namespace) -> int:
-    if os.environ.get("GITHUB_REPOSITORY", REPO) != REPO:
+    repo = get_repo()
+    if os.environ.get("GITHUB_REPOSITORY", repo) != repo:
         raise BrokerError("Repository mismatch")
     with open(args.request, encoding="utf-8") as handle:
         data = json.load(handle)
@@ -1464,7 +1544,7 @@ def main() -> int:
     except BrokerError as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         print(f"ERROR: broker failed closed ({type(e).__name__})", file=sys.stderr)
         return 1
 

@@ -14,7 +14,7 @@ jobs:
     name: Validate and author issue-scoped bot change
     if: >-
       github.event.issue.pull_request == null &&
-      github.event.comment.user.login == 'jasonbridges' &&
+      github.event.comment.user.login == (vars.AGENT_BROKER_OWNER || github.repository_owner) &&
       github.event.comment.author_association == 'OWNER' &&
       startsWith(github.event.comment.body, '/agent-commit-v1')
     # Concurrency is job-scoped deliberately: unauthorized/bot issue-comment
@@ -22,10 +22,18 @@ jobs:
     # Planning commands use one group per owner comment; canonical work remains
     # serialized per implementation issue.
     concurrency:
-      group: agent-command-broker-${{ github.event.issue.number == 377 && format('planning-{0}', github.event.comment.id) || format('issue-{0}', github.event.issue.number) }}
+      group: agent-command-broker-${{ (vars.AGENT_BROKER_PLANNING_ISSUE != '' && format('{0}', github.event.issue.number) == vars.AGENT_BROKER_PLANNING_ISSUE) && format('planning-{0}', github.event.comment.id) || format('issue-{0}', github.event.issue.number) }}
       cancel-in-progress: false
     runs-on: [self-hosted, ci-standard]
     timeout-minutes: 10
+
+    env:
+      AGENT_BROKER_OWNER: ${{ vars.AGENT_BROKER_OWNER || github.repository_owner }}
+      AGENT_BOT_NAME: ${{ vars.AGENT_BOT_NAME || '' }}
+      AGENT_BOT_EMAIL: ${{ vars.AGENT_BOT_EMAIL || '' }}
+      AGENT_BROKER_BRANCH_PATTERN: ${{ vars.AGENT_BROKER_BRANCH_PATTERN || '' }}
+      AGENT_BROKER_BRANCH_RE: ${{ vars.AGENT_BROKER_BRANCH_RE || '' }}
+      AGENT_BROKER_PLANNING_ISSUE: ${{ vars.AGENT_BROKER_PLANNING_ISSUE || '' }}
 
     steps:
       # Security boundary: issue_comment workflows execute the workflow definition
@@ -60,7 +68,7 @@ jobs:
 
       # The private key never reaches candidate inputs. The action masks the
       # installation token and revokes it automatically at job completion.
-      - name: Mint short-lived jasonbridges-agent installation token
+      - name: Mint short-lived GitHub App installation token
         id: app-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:

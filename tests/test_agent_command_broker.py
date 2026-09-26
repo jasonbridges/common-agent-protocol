@@ -768,7 +768,7 @@ class Tests(unittest.TestCase):
         self.assertNotRegex(workflow, r"(?m)^concurrency:")
         broker_job = workflow.split("  broker:\n", 1)[1]
         self.assertIn("    concurrency:\n", broker_job)
-        self.assertIn("github.event.issue.number == 377", broker_job)
+        self.assertIn("vars.AGENT_BROKER_PLANNING_ISSUE", broker_job)
         self.assertIn("format('planning-{0}', github.event.comment.id)", broker_job)
         self.assertIn("format('issue-{0}', github.event.issue.number)", broker_job)
         self.assertIn("cancel-in-progress: false", broker_job)
@@ -788,7 +788,7 @@ class Tests(unittest.TestCase):
         broker_job = workflow.split("  broker:\n", 1)[1]
         auth_end = broker_job.index("    concurrency:\n")
         authorization = broker_job[:auth_end]
-        self.assertIn("github.event.comment.user.login == 'jasonbridges'", authorization)
+        self.assertIn("github.event.comment.user.login == (vars.AGENT_BROKER_OWNER || github.repository_owner)", authorization)
         self.assertIn("github.event.comment.author_association == 'OWNER'", authorization)
         self.assertIn("startsWith(github.event.comment.body, '/agent-commit-v1')", authorization)
         self.assertIn("fail the job-level `if` before they can enter an authorized group", workflow)
