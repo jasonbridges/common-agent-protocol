@@ -6,6 +6,7 @@ import importlib.util
 import json
 import sys
 import unittest
+import unittest.mock
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +19,9 @@ sys.modules[SPEC.name] = broker
 SPEC.loader.exec_module(broker)
 
 TEST_CONTENT = b"broker-test-content"
-TEST_SHA = hashlib.sha1(b"blob " + str(len(TEST_CONTENT)).encode() + b"\0" + TEST_CONTENT).hexdigest()
+TEST_SHA = hashlib.sha1(
+    b"blob " + str(len(TEST_CONTENT)).encode() + b"\0" + TEST_CONTENT
+).hexdigest()
 
 ISSUE_BODY = """## Summary
 X
@@ -76,9 +79,15 @@ def payload(**kw: Any) -> dict[str, Any]:
 
 def event(p: dict[str, Any] | None = None, **comment_kw: Any) -> dict[str, Any]:
     body = broker.PREFIX + json.dumps(p or payload(), separators=(",", ":"))
-    c = {"id": 7, "body": body, "user": {"login": "jasonbridges"}, "author_association": "OWNER"}
+    c = {
+        "id": 7,
+        "body": body,
+        "user": {"login": "jasonbridges"},
+        "author_association": "OWNER",
+    }
     c.update(comment_kw)
     return {"issue": {"number": 362, "state": "open"}, "comment": c}
+
 
 IMPLEMENTATION_BODY = """## Summary
 implementation
@@ -105,7 +114,13 @@ none
 """
 
 
-def v2_event(p: dict[str, Any], *, source_issue: int = 377, comment_id: int = 8, hidden: bool = True) -> dict[str, Any]:
+def v2_event(
+    p: dict[str, Any],
+    *,
+    source_issue: int = 377,
+    comment_id: int = 8,
+    hidden: bool = True,
+) -> dict[str, Any]:
     raw = json.dumps(p, separators=(",", ":")).encode()
     if hidden:
         encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
@@ -136,13 +151,22 @@ def work_update_payload(**kw: Any) -> dict[str, Any]:
     return p
 
 
-
 class FakeGH:
     def __init__(self):
         self.branch = False
         self.branch_head: str | None = None
-        self.issue_row = {"number": 362, "state": "open", "title": "implementation", "body": ISSUE_BODY}
-        self.planning_row = {"number": 377, "state": "open", "title": "planning queue", "body": "## Summary\nqueue"}
+        self.issue_row = {
+            "number": 362,
+            "state": "open",
+            "title": "implementation",
+            "body": ISSUE_BODY,
+        }
+        self.planning_row = {
+            "number": 377,
+            "state": "open",
+            "title": "planning queue",
+            "body": "## Summary\nqueue",
+        }
         self.other_issues: dict[int, dict[str, Any]] = {}
         self.pulls: list[dict[str, Any]] = []
         self.pull_file_map: dict[int, set[str]] = {}
@@ -150,7 +174,12 @@ class FakeGH:
         self.patches: list[tuple[str, Any]] = []
         self.milestones: list[dict[str, Any]] = []
         self.comments: dict[int, dict[str, Any]] = {
-            7: {"id": 7, "body": broker.PREFIX + json.dumps(payload(), separators=(",", ":")), "user": {"login": "jasonbridges"}, "author_association": "OWNER"}
+            7: {
+                "id": 7,
+                "body": broker.PREFIX + json.dumps(payload(), separators=(",", ":")),
+                "user": {"login": "jasonbridges"},
+                "author_association": "OWNER",
+            }
         }
         self.issue_comments: list[dict[str, Any]] = []
         self.comment_body = self.comments[7]["body"]
@@ -192,7 +221,12 @@ class FakeGH:
 
     def get(self, path, allow_404=False):
         if path == "/git/blobs/" + TEST_SHA:
-            return {"sha": TEST_SHA, "size": len(TEST_CONTENT), "encoding": "base64", "content": base64.b64encode(TEST_CONTENT).decode()}
+            return {
+                "sha": TEST_SHA,
+                "size": len(TEST_CONTENT),
+                "encoding": "base64",
+                "content": base64.b64encode(TEST_CONTENT).decode(),
+            }
         if path.startswith("/issues/comments/"):
             comment_id = int(path.rsplit("/", 1)[1])
             if comment_id == 7:
@@ -208,15 +242,29 @@ class FakeGH:
                 "status": "ahead",
                 "behind_by": 0,
                 "ahead_by": 1,
-                "commits": [{
-                    "sha": head,
-                    "commit": {
-                        "message": payload()["commit_message"],
-                        "author": {"name": broker.BOT_NAME, "email": broker.BOT_EMAIL},
-                        "committer": {"name": broker.BOT_NAME, "email": broker.BOT_EMAIL},
-                    },
-                }],
-                "files": [{"filename": "deploy/manifest.json", "sha": TEST_SHA, "status": "modified"}],
+                "commits": [
+                    {
+                        "sha": head,
+                        "commit": {
+                            "message": payload()["commit_message"],
+                            "author": {
+                                "name": broker.BOT_NAME,
+                                "email": broker.BOT_EMAIL,
+                            },
+                            "committer": {
+                                "name": broker.BOT_NAME,
+                                "email": broker.BOT_EMAIL,
+                            },
+                        },
+                    }
+                ],
+                "files": [
+                    {
+                        "filename": "deploy/manifest.json",
+                        "sha": TEST_SHA,
+                        "status": "modified",
+                    }
+                ],
             }
         if path == "/pulls/99/requested_reviewers":
             return {"users": [{"login": "jasonbridges"}]}
@@ -249,7 +297,12 @@ class FakeGH:
             self.milestones.append(row)
             return row
         if path == "/issues":
-            return {"number": 400, "state": "open", "html_url": "https://example/issues/400", **data}
+            return {
+                "number": 400,
+                "state": "open",
+                "html_url": "https://example/issues/400",
+                **data,
+            }
         return {"ok": True}
 
     def patch(self, path, data):
@@ -276,7 +329,9 @@ class Tests(unittest.TestCase):
         if hidden:
             raw = json.dumps(p or payload(), separators=(",", ":")).encode()
             encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
-            e["comment"]["body"] = broker.PREFIX + broker.HIDDEN_PREFIX + encoded + broker.HIDDEN_SUFFIX
+            e["comment"]["body"] = (
+                broker.PREFIX + broker.HIDDEN_PREFIX + encoded + broker.HIDDEN_SUFFIX
+            )
         return broker.from_event(e)
 
     def test_owner_command_parses(self):
@@ -296,14 +351,18 @@ class Tests(unittest.TestCase):
 
     def test_hidden_malformed_rejected(self):
         e = event()
-        e["comment"]["body"] = broker.PREFIX + broker.HIDDEN_PREFIX + "%%%" + broker.HIDDEN_SUFFIX
+        e["comment"]["body"] = (
+            broker.PREFIX + broker.HIDDEN_PREFIX + "%%%" + broker.HIDDEN_SUFFIX
+        )
         self.assertRaises(broker.BrokerError, broker.from_event, e)
 
     def test_pr_comment_and_non_owner_rejected(self):
         e = event()
         e["issue"]["pull_request"] = {}
         self.assertRaises(broker.BrokerError, broker.from_event, e)
-        self.assertRaises(broker.BrokerError, broker.from_event, event(user={"login": "x"}))
+        self.assertRaises(
+            broker.BrokerError, broker.from_event, event(user={"login": "x"})
+        )
 
     def test_malformed_oversize_and_unknown_fields_rejected(self):
         e = event()
@@ -315,15 +374,36 @@ class Tests(unittest.TestCase):
         self.assertRaises(broker.BrokerError, self.req, payload(extra=True))
 
     def test_workflow_scope_escape_and_mode_rejected(self):
-        self.assertRaises(broker.BrokerError, self.req, payload(files=[{"path": ".github/workflows/x.yml", "sha": TEST_SHA}]))
-        self.assertRaises(broker.BrokerError, self.req, payload(files=[{"path": "deploy/manifest.json", "sha": TEST_SHA, "mode": "120000"}]))
+        self.assertRaises(
+            broker.BrokerError,
+            self.req,
+            payload(files=[{"path": ".github/workflows/x.yml", "sha": TEST_SHA}]),
+        )
+        self.assertRaises(
+            broker.BrokerError,
+            self.req,
+            payload(
+                files=[
+                    {"path": "deploy/manifest.json", "sha": TEST_SHA, "mode": "120000"}
+                ]
+            ),
+        )
         r = self.req(payload(files=[{"path": "README.md", "sha": TEST_SHA}]))
         self.assertRaises(broker.BrokerError, broker.validate_remote, FakeGH(), r)
 
     def test_stale_base_and_existing_claim_rejected(self):
         r = self.req()
         g = FakeGH()
-        r2 = broker.Request(r.issue, "f" * 40, r.message, r.files, r.title, r.body, r.comment_id, r.comment_digest)
+        r2 = broker.Request(
+            r.issue,
+            "f" * 40,
+            r.message,
+            r.files,
+            r.title,
+            r.body,
+            r.comment_id,
+            r.comment_digest,
+        )
         self.assertRaises(broker.BrokerError, broker.validate_remote, g, r2)
         g.branch = True
         self.assertRaises(broker.BrokerError, broker.validate_remote, g, r)
@@ -333,7 +413,9 @@ class Tests(unittest.TestCase):
             def get(self, path, allow_404=False):
                 if path == "/git/blobs/" + TEST_SHA:
                     encoded = base64.b64encode(TEST_CONTENT).decode()
-                    wrapped = "\n".join(encoded[i:i + 4] for i in range(0, len(encoded), 4))
+                    wrapped = "\n".join(
+                        encoded[i : i + 4] for i in range(0, len(encoded), 4)
+                    )
                     return {
                         "sha": TEST_SHA,
                         "size": len(TEST_CONTENT),
@@ -380,14 +462,20 @@ class Tests(unittest.TestCase):
         g = FakeGH()
         g.pulls = [{"number": 10, "head": {"ref": "work/issue-10"}}]
         g.pull_file_map[10] = {"deploy/manifest.json"}
-        g.other_issues[10] = {"state": "open", "body": "## Scope ownership\nExclusive:\n- `other.txt`\nShared: none"}
+        g.other_issues[10] = {
+            "state": "open",
+            "body": "## Scope ownership\nExclusive:\n- `other.txt`\nShared: none",
+        }
         self.assertRaises(broker.BrokerError, broker.validate_remote, g, self.req())
 
     def test_exclusive_collision_rejected(self):
         g = FakeGH()
         g.pulls = [{"number": 10, "head": {"ref": "work/issue-10"}}]
         g.pull_file_map[10] = {"other.txt"}
-        g.other_issues[10] = {"state": "open", "body": "## Scope ownership\nExclusive:\n- `deploy/**`\nShared: none"}
+        g.other_issues[10] = {
+            "state": "open",
+            "body": "## Scope ownership\nExclusive:\n- `deploy/**`\nShared: none",
+        }
         self.assertRaises(broker.BrokerError, broker.validate_remote, g, self.req())
 
     def test_reciprocal_exception_allows_collision(self):
@@ -395,7 +483,10 @@ class Tests(unittest.TestCase):
         g.pulls = [{"number": 10, "head": {"ref": "work/issue-10"}}]
         g.pull_file_map[10] = {"deploy/manifest.json"}
         g.issue_row["body"] = ISSUE_BODY + "\nCoordination-Exception: #10\n"
-        g.other_issues[10] = {"state": "open", "body": "## Scope ownership\nExclusive:\n- `deploy/**`\nShared: none\nCoordination-Exception: #362\n"}
+        g.other_issues[10] = {
+            "state": "open",
+            "body": "## Scope ownership\nExclusive:\n- `deploy/**`\nShared: none\nCoordination-Exception: #362\n",
+        }
         broker.validate_remote(g, self.req())
 
     def test_edited_source_comment_rejected(self):
@@ -450,7 +541,11 @@ class Tests(unittest.TestCase):
             "html_url": "https://example/99",
             "title": "fix(deploy): privileged validator (#362)",
             "body": PR_BODY,
-            "head": {"ref": "work/issue-362", "sha": head, "repo": {"full_name": broker.REPO}},
+            "head": {
+                "ref": "work/issue-362",
+                "sha": head,
+                "repo": {"full_name": broker.REPO},
+            },
             "base": {"ref": "main"},
         }
 
@@ -460,18 +555,32 @@ class Tests(unittest.TestCase):
             broker.from_event,
             v2_event({"version": 2, "operation": "repo.delete"}),
         )
-        p = {"version": 2, "operation": "plan.create_milestone", "title": "x", "admin": True}
+        p = {
+            "version": 2,
+            "operation": "plan.create_milestone",
+            "title": "x",
+            "admin": True,
+        }
         self.assertRaises(broker.BrokerError, broker.from_event, v2_event(p))
         p.pop("admin")
-        self.assertRaises(broker.BrokerError, broker.from_event, v2_event(p, source_issue=362))
+        self.assertRaises(
+            broker.BrokerError, broker.from_event, v2_event(p, source_issue=362)
+        )
 
     def test_plan_create_milestone_and_duplicate_rejection(self):
         g = FakeGH()
-        cmd = self.v2({"version": 2, "operation": "plan.create_milestone", "title": "Broker v2"}, gh=g)
+        cmd = self.v2(
+            {"version": 2, "operation": "plan.create_milestone", "title": "Broker v2"},
+            gh=g,
+        )
         broker.validate_planning(g, cmd)
         result = broker.mutate_planning(g, cmd)
         self.assertIn("milestone #3", result)
-        cmd2 = self.v2({"version": 2, "operation": "plan.create_milestone", "title": "Broker v2"}, comment_id=9, gh=g)
+        cmd2 = self.v2(
+            {"version": 2, "operation": "plan.create_milestone", "title": "Broker v2"},
+            comment_id=9,
+            gh=g,
+        )
         self.assertRaises(broker.BrokerError, broker.validate_planning, g, cmd2)
 
     def test_plan_create_issue_requires_canonical_implementation_body(self):
@@ -505,9 +614,19 @@ class Tests(unittest.TestCase):
         cmd = self.v2(p, gh=g)
         broker.validate_planning(g, cmd)
         broker.mutate_planning(g, cmd)
-        g.other_issues[401] = {"number": 401, "state": "open", "title": "x", "body": "body"}
+        g.other_issues[401] = {
+            "number": 401,
+            "state": "open",
+            "title": "x",
+            "body": "body",
+        }
         assign = self.v2(
-            {"version": 2, "operation": "plan.assign_milestone", "target_issue": 401, "milestone": 5},
+            {
+                "version": 2,
+                "operation": "plan.assign_milestone",
+                "target_issue": 401,
+                "milestone": 5,
+            },
             comment_id=9,
             gh=g,
         )
@@ -516,7 +635,12 @@ class Tests(unittest.TestCase):
 
     def test_plan_update_issue_uses_optimistic_body_and_title_concurrency(self):
         g = FakeGH()
-        g.other_issues[401] = {"number": 401, "state": "open", "title": "old", "body": IMPLEMENTATION_BODY}
+        g.other_issues[401] = {
+            "number": 401,
+            "state": "open",
+            "title": "old",
+            "body": IMPLEMENTATION_BODY,
+        }
         p = {
             "version": 2,
             "operation": "plan.update_issue",
@@ -524,7 +648,9 @@ class Tests(unittest.TestCase):
             "expected_body_sha256": broker._body_digest(IMPLEMENTATION_BODY),
             "expected_title": "old",
             "title": "new",
-            "body": IMPLEMENTATION_BODY.replace("implementation", "implementation updated", 1),
+            "body": IMPLEMENTATION_BODY.replace(
+                "implementation", "implementation updated", 1
+            ),
         }
         cmd = self.v2(p, gh=g)
         broker.mutate_planning(g, cmd)
@@ -547,21 +673,37 @@ class Tests(unittest.TestCase):
         self.assertEqual(number, 99)
         self.assertEqual(sha, "e" * 40)
         self.assertEqual(g.branch_head, "e" * 40)
-        stale = self.v2(work_update_payload(expected_head_sha="1" * 40), source_issue=362, comment_id=9, gh=g)
+        stale = self.v2(
+            work_update_payload(expected_head_sha="1" * 40),
+            source_issue=362,
+            comment_id=9,
+            gh=g,
+        )
         self.assertRaises(broker.BrokerError, broker.validate_work_update, g, stale)
 
     def test_work_update_rejects_foreign_collision_and_workflow_path(self):
         g = FakeGH()
         g.branch = True
         g.branch_head = "f" * 40
-        g.pulls = [self.canonical_pr(), {"number": 10, "head": {"ref": "work/issue-10"}, "base": {"ref": "main"}}]
+        g.pulls = [
+            self.canonical_pr(),
+            {"number": 10, "head": {"ref": "work/issue-10"}, "base": {"ref": "main"}},
+        ]
         g.pull_file_map[99] = {"deploy/manifest.json"}
         g.pull_file_map[10] = {"deploy/manifest.json"}
-        g.other_issues[10] = {"number": 10, "state": "open", "body": "## Scope ownership\nExclusive:\n- `other.txt`\nShared: none"}
+        g.other_issues[10] = {
+            "number": 10,
+            "state": "open",
+            "body": "## Scope ownership\nExclusive:\n- `other.txt`\nShared: none",
+        }
         cmd = self.v2(work_update_payload(), source_issue=362, gh=g)
         self.assertRaises(broker.BrokerError, broker.validate_work_update, g, cmd)
-        bad = work_update_payload(files=[{"path": ".github/workflows/x.yml", "sha": TEST_SHA}])
-        self.assertRaises(broker.BrokerError, broker.from_event, v2_event(bad, source_issue=362))
+        bad = work_update_payload(
+            files=[{"path": ".github/workflows/x.yml", "sha": TEST_SHA}]
+        )
+        self.assertRaises(
+            broker.BrokerError, broker.from_event, v2_event(bad, source_issue=362)
+        )
 
     def test_work_update_can_update_only_validated_pr_title_body(self):
         g = FakeGH()
@@ -571,7 +713,9 @@ class Tests(unittest.TestCase):
         g.pull_file_map[99] = {"deploy/manifest.json"}
         new_body = PR_BODY + "\nextra detail\n"
         cmd = self.v2(
-            work_update_payload(pr={"title": "fix(deploy): revised (#362)", "body": new_body}),
+            work_update_payload(
+                pr={"title": "fix(deploy): revised (#362)", "body": new_body}
+            ),
             source_issue=362,
             gh=g,
         )
@@ -585,10 +729,12 @@ class Tests(unittest.TestCase):
         req = self.req()
         g.branch = True
         g.branch_head = head or req.base_sha
-        g.issue_comments = [{
-            "user": {"login": broker.BOT_NAME},
-            "body": broker._claim_body(req),
-        }]
+        g.issue_comments = [
+            {
+                "user": {"login": broker.BOT_NAME},
+                "body": broker._claim_body(req),
+            }
+        ]
         if with_pr:
             row = self.canonical_pr(head=g.branch_head)
             row["title"] = req.title
@@ -626,7 +772,7 @@ class Tests(unittest.TestCase):
         self.assertEqual(ref_patches, [])
 
     def test_resume_matching_existing_pr_is_idempotent(self):
-        g, req, cmd = self._resume_fixture(head="e" * 40, with_pr=True)
+        g, _, cmd = self._resume_fixture(head="e" * 40, with_pr=True)
         _, state, _ = broker.validate_resume(g, cmd)
         self.assertEqual(state, "pr-exists")
         before = len([row for row in g.posts if row[0] == "/pulls"])
@@ -639,21 +785,27 @@ class Tests(unittest.TestCase):
         g.issue_comments = []
         self.assertRaises(broker.BrokerError, broker.validate_resume, g, cmd)
         g, _, cmd = self._resume_fixture(head="e" * 40)
+
         class DriftGH(FakeGH):
             pass
+
         original_get = g.get
+
         def bad_get(path, allow_404=False):
             row = original_get(path, allow_404)
             if path.startswith("/compare/"):
                 row = dict(row)
                 row["ahead_by"] = 2
             return row
+
         g.get = bad_get
         self.assertRaises(broker.BrokerError, broker.validate_resume, g, cmd)
 
     def test_saved_v2_command_round_trip_and_source_edit_detection(self):
         g = FakeGH()
-        cmd = self.v2({"version": 2, "operation": "plan.create_milestone", "title": "x"}, gh=g)
+        cmd = self.v2(
+            {"version": 2, "operation": "plan.create_milestone", "title": "x"}, gh=g
+        )
         saved = broker._saved_command(cmd, {"materialized_blobs": {}})
         restored, materialized = broker._command_from_saved(saved)
         self.assertEqual(restored, cmd)
@@ -665,7 +817,9 @@ class Tests(unittest.TestCase):
         r = self.req()
         g = FakeGH()
         materialized = broker.materialize_blobs(g, r)
-        materialized["deploy/manifest.json"]["content_b64"] = base64.b64encode(b"tampered").decode()
+        materialized["deploy/manifest.json"]["content_b64"] = base64.b64encode(
+            b"tampered"
+        ).decode()
         self.assertRaises(broker.BrokerError, broker.recreate_blobs, g, r, materialized)
 
     def test_ref_advance_treats_ambiguous_failure_as_success_only_if_head_matches(self):
@@ -673,15 +827,16 @@ class Tests(unittest.TestCase):
         g.branch = True
         g.branch_head = "a" * 40
         original_patch = g.patch
+
         def ambiguous(path, data):
             if path.startswith("/git/refs/"):
                 g.branch_head = data["sha"]
                 raise broker.BrokerError("simulated 500 after write")
             return original_patch(path, data)
+
         g.patch = ambiguous
         broker._advance_ref_idempotent(g, "work/issue-362", "e" * 40)
         self.assertEqual(g.branch_head, "e" * 40)
-
 
     def test_planning_cannot_disguise_or_strip_implementation_scope(self):
         g = FakeGH()
@@ -694,7 +849,12 @@ class Tests(unittest.TestCase):
         }
         cmd = self.v2(disguised, gh=g)
         self.assertRaises(broker.BrokerError, broker.validate_planning, g, cmd)
-        g.other_issues[401] = {"number": 401, "state": "open", "title": "impl", "body": IMPLEMENTATION_BODY}
+        g.other_issues[401] = {
+            "number": 401,
+            "state": "open",
+            "title": "impl",
+            "body": IMPLEMENTATION_BODY,
+        }
         strip = {
             "version": 2,
             "operation": "plan.update_issue",
@@ -707,10 +867,20 @@ class Tests(unittest.TestCase):
 
     def test_planning_rejects_closed_issue_and_milestone_resources(self):
         g = FakeGH()
-        g.other_issues[401] = {"number": 401, "state": "closed", "title": "x", "body": "body"}
+        g.other_issues[401] = {
+            "number": 401,
+            "state": "closed",
+            "title": "x",
+            "body": "body",
+        }
         g.milestones.append({"number": 5, "title": "closed", "state": "closed"})
         assign = self.v2(
-            {"version": 2, "operation": "plan.assign_milestone", "target_issue": 401, "milestone": 5},
+            {
+                "version": 2,
+                "operation": "plan.assign_milestone",
+                "target_issue": 401,
+                "milestone": 5,
+            },
             gh=g,
         )
         self.assertRaises(broker.BrokerError, broker.validate_planning, g, assign)
@@ -728,7 +898,9 @@ class Tests(unittest.TestCase):
 
     def test_resume_revalidates_new_collision_after_original_failure(self):
         g, _, cmd = self._resume_fixture()
-        g.pulls = [{"number": 10, "head": {"ref": "work/issue-10"}, "base": {"ref": "main"}}]
+        g.pulls = [
+            {"number": 10, "head": {"ref": "work/issue-10"}, "base": {"ref": "main"}}
+        ]
         g.pull_file_map[10] = {"deploy/manifest.json"}
         g.other_issues[10] = {
             "number": 10,
@@ -737,21 +909,33 @@ class Tests(unittest.TestCase):
         }
         self.assertRaises(broker.BrokerError, broker.validate_resume, g, cmd)
 
-    def test_resume_allows_main_fast_forward_only_when_original_base_remains_ancestor(self):
+    def test_resume_allows_main_fast_forward_only_when_original_base_remains_ancestor(
+        self,
+    ):
         g, req, cmd = self._resume_fixture()
         g.main_sha = lambda: "9" * 40
         original_get = g.get
+
         def ancestor_get(path, allow_404=False):
             if path == f"/compare/{req.base_sha}...{'9' * 40}":
-                return {"status": "ahead", "behind_by": 0, "ahead_by": 2, "commits": [], "files": []}
+                return {
+                    "status": "ahead",
+                    "behind_by": 0,
+                    "ahead_by": 2,
+                    "commits": [],
+                    "files": [],
+                }
             return original_get(path, allow_404)
+
         g.get = ancestor_get
         _, state, _ = broker.validate_resume(g, cmd)
         self.assertEqual(state, "at-base")
+
         def divergent_get(path, allow_404=False):
             if path == f"/compare/{req.base_sha}...{'9' * 40}":
                 return {"status": "diverged", "behind_by": 1, "ahead_by": 2}
             return original_get(path, allow_404)
+
         g.get = divergent_get
         self.assertRaises(broker.BrokerError, broker.validate_resume, g, cmd)
 
@@ -788,10 +972,20 @@ class Tests(unittest.TestCase):
         broker_job = workflow.split("  broker:\n", 1)[1]
         auth_end = broker_job.index("    concurrency:\n")
         authorization = broker_job[:auth_end]
-        self.assertIn("github.event.comment.user.login == (vars.AGENT_BROKER_OWNER || github.repository_owner)", authorization)
-        self.assertIn("github.event.comment.author_association == 'OWNER'", authorization)
-        self.assertIn("startsWith(github.event.comment.body, '/agent-commit-v1')", authorization)
-        self.assertIn("fail the job-level `if` before they can enter an authorized group", workflow)
+        self.assertIn(
+            "github.event.comment.user.login == (vars.AGENT_BROKER_OWNER || github.repository_owner)",
+            authorization,
+        )
+        self.assertIn(
+            "github.event.comment.author_association == 'OWNER'", authorization
+        )
+        self.assertIn(
+            "startsWith(github.event.comment.body, '/agent-commit-v1')", authorization
+        )
+        self.assertIn(
+            "fail the job-level `if` before they can enter an authorized group",
+            workflow,
+        )
 
         def authorized(login: str, association: str, body: str) -> bool:
             return (
@@ -804,6 +998,173 @@ class Tests(unittest.TestCase):
         self.assertFalse(authorized(broker.BOT_NAME, "NONE", "BOT BROKER SUCCESS"))
         self.assertFalse(authorized("jasonbridges", "OWNER", "ordinary discussion"))
 
+    def test_configuration_template_empty_and_whitespace_env_fallbacks(self):
+        empty_env = {
+            "AGENT_BROKER_OWNER": "jasonbridges",
+            "AGENT_BOT_NAME": "",
+            "AGENT_BOT_EMAIL": "",
+            "AGENT_BROKER_BRANCH_PATTERN": "",
+            "AGENT_BROKER_BRANCH_RE": "",
+            "AGENT_BROKER_PLANNING_ISSUE": "",
+        }
+        with unittest.mock.patch.dict(broker.os.environ, empty_env, clear=False):
+            self.assertEqual(broker.get_owner(), "jasonbridges")
+            self.assertEqual(broker.get_bot_name(), "jasonbridges-agent[bot]")
+            self.assertEqual(
+                broker.get_bot_email(),
+                "331491158+jasonbridges-agent[bot]@users.noreply.github.com",
+            )
+            self.assertEqual(broker.branch_for_issue(362), "work/issue-362")
+            branch_re = broker.get_branch_re()
+            self.assertIsNotNone(branch_re.fullmatch("work/issue-362"))
+            self.assertEqual(branch_re.fullmatch("work/issue-362").group(1), "362")
+            self.assertIsNone(branch_re.fullmatch(""))
+            self.assertIsNone(branch_re.fullmatch("work/issue-"))
+            self.assertIsNone(branch_re.fullmatch("main"))
+            self.assertIsNone(broker.get_planning_issue())
+
+            # Planning commands fail closed when planning issue is blank/disabled
+            g = FakeGH()
+            with self.assertRaises(broker.BrokerError) as ctx:
+                self.v2(
+                    {"version": 2, "operation": "plan.create_milestone", "title": "v1"},
+                    source_issue=377,
+                    gh=g,
+                )
+            self.assertIn("not configured", str(ctx.exception))
+            cmd = broker.V2Command(
+                "plan.create_milestone", 377, {"title": "v1"}, 8, "digest"
+            )
+            with self.assertRaises(broker.BrokerError) as ctx:
+                broker.validate_planning(g, cmd)
+            self.assertIn("not configured", str(ctx.exception))
+
+        ws_env = {
+            "AGENT_BROKER_OWNER": "  jasonbridges  ",
+            "AGENT_BOT_NAME": "   ",
+            "AGENT_BOT_EMAIL": "\t  \n",
+            "AGENT_BROKER_BRANCH_PATTERN": "   ",
+            "AGENT_BROKER_BRANCH_RE": " \t ",
+            "AGENT_BROKER_PLANNING_ISSUE": "   ",
+        }
+        with unittest.mock.patch.dict(broker.os.environ, ws_env, clear=False):
+            self.assertEqual(broker.get_owner(), "jasonbridges")
+            self.assertEqual(broker.get_bot_name(), "jasonbridges-agent[bot]")
+            self.assertEqual(
+                broker.get_bot_email(),
+                "331491158+jasonbridges-agent[bot]@users.noreply.github.com",
+            )
+            self.assertEqual(broker.branch_for_issue(362), "work/issue-362")
+            self.assertIsNotNone(broker.get_branch_re().fullmatch("work/issue-362"))
+            self.assertIsNone(broker.get_planning_issue())
+
+    def test_configuration_module_level_initialization_with_empty_template_env(self):
+        empty_env = {
+            "AGENT_BROKER_OWNER": "jasonbridges",
+            "AGENT_BOT_NAME": "",
+            "AGENT_BOT_EMAIL": "",
+            "AGENT_BROKER_BRANCH_PATTERN": "",
+            "AGENT_BROKER_BRANCH_RE": "",
+            "AGENT_BROKER_PLANNING_ISSUE": "",
+        }
+        with unittest.mock.patch.dict(broker.os.environ, empty_env, clear=False):
+            spec = importlib.util.spec_from_file_location(
+                "agent_command_broker_isolated", SCRIPT
+            )
+            self.assertIsNotNone(spec)
+            self.assertIsNotNone(spec.loader)
+            mod = importlib.util.module_from_spec(spec)
+            sys.modules[spec.name] = mod
+            try:
+                spec.loader.exec_module(mod)
+                self.assertEqual(mod.BOT_NAME, "jasonbridges-agent[bot]")
+                self.assertEqual(
+                    mod.BOT_EMAIL,
+                    "331491158+jasonbridges-agent[bot]@users.noreply.github.com",
+                )
+                self.assertEqual(mod.BRANCH_RE.pattern, r"^work/issue-(\d+)$")
+                self.assertIsNotNone(mod.BRANCH_RE.fullmatch("work/issue-362"))
+                self.assertIsNone(mod.BRANCH_RE.fullmatch(""))
+                self.assertEqual(mod.branch_for_issue(362), "work/issue-362")
+                self.assertIsNone(mod.PLANNING_ISSUE)
+                self.assertIsNone(mod.get_planning_issue())
+            finally:
+                sys.modules.pop(spec.name, None)
+
+    def test_configuration_non_default_and_backward_compatibility_aliases(self):
+        custom_env = {
+            "AGENT_BROKER_OWNER": "custom-owner",
+            "AGENT_BOT_NAME": "custom-bot[bot]",
+            "AGENT_BOT_EMAIL": "custom-bot@users.noreply.github.com",
+            "AGENT_BROKER_BRANCH_PATTERN": "task/issue-{issue}",
+            "AGENT_BROKER_BRANCH_RE": r"^task/issue-(\d+)$",
+            "AGENT_BROKER_PLANNING_ISSUE": "456",
+        }
+        with unittest.mock.patch.dict(broker.os.environ, custom_env, clear=False):
+            self.assertEqual(broker.get_owner(), "custom-owner")
+            self.assertEqual(broker.get_bot_name(), "custom-bot[bot]")
+            self.assertEqual(
+                broker.get_bot_email(), "custom-bot@users.noreply.github.com"
+            )
+            self.assertEqual(broker.branch_for_issue(456), "task/issue-456")
+            m = broker.get_branch_re().fullmatch("task/issue-456")
+            self.assertIsNotNone(m)
+            self.assertEqual(m.group(1), "456")
+            self.assertEqual(broker.get_planning_issue(), 456)
+
+            g = FakeGH()
+            g.other_issues[456] = {
+                "number": 456,
+                "state": "open",
+                "title": "planning",
+                "body": "## Summary\nqueue",
+            }
+            e = v2_event(
+                {"version": 2, "operation": "plan.create_milestone", "title": "v2"},
+                source_issue=456,
+            )
+            e["comment"]["user"]["login"] = "custom-owner"
+            cmd = broker.from_event(e)
+            broker.validate_planning(g, cmd)
+
+        compat_env = {
+            "AGENT_BOT_NAME": "",
+            "AGENT_BROKER_BOT_NAME": "legacy-bot[bot]",
+            "AGENT_BOT_EMAIL": "",
+            "AGENT_BROKER_BOT_EMAIL": "legacy-bot@users.noreply.github.com",
+        }
+        with unittest.mock.patch.dict(broker.os.environ, compat_env, clear=False):
+            self.assertEqual(broker.get_bot_name(), "legacy-bot[bot]")
+            self.assertEqual(
+                broker.get_bot_email(), "legacy-bot@users.noreply.github.com"
+            )
+
+    def test_configuration_invalid_values_fail_closed_at_use_or_validation(self):
+        with unittest.mock.patch.dict(
+            broker.os.environ, {"AGENT_BROKER_BRANCH_RE": "["}, clear=False
+        ):
+            self.assertRaises(broker.BrokerError, broker.get_branch_re)
+
+        for bad_val in ("not-a-number", "-5", "3.14", "bad"):
+            with unittest.mock.patch.dict(
+                broker.os.environ, {"AGENT_BROKER_PLANNING_ISSUE": bad_val}, clear=False
+            ):
+                self.assertRaises(broker.BrokerError, broker.get_planning_issue)
+
+        for disabled_val in ("0", "disabled", "Disabled", "DISABLED"):
+            with unittest.mock.patch.dict(
+                broker.os.environ,
+                {"AGENT_BROKER_PLANNING_ISSUE": disabled_val},
+                clear=False,
+            ):
+                self.assertIsNone(broker.get_planning_issue())
+
+        with unittest.mock.patch.dict(
+            broker.os.environ,
+            {"AGENT_BROKER_BRANCH_PATTERN": "task/{wrong_field}"},
+            clear=False,
+        ):
+            self.assertRaises(broker.BrokerError, broker.branch_for_issue, 362)
 
 
 if __name__ == "__main__":
