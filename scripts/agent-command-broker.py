@@ -142,17 +142,38 @@ def branch_for_issue(issue_number: int) -> str:
 def get_branch_re() -> re.Pattern[str]:
     raw = os.environ.get("AGENT_BROKER_BRANCH_RE")
     if raw is None or not raw.strip():
-        if (
-            "BRANCH_RE" in globals()
+        compiled = (
+            BRANCH_RE
+            if "BRANCH_RE" in globals()
             and isinstance(BRANCH_RE, re.Pattern)
             and BRANCH_RE.pattern
-        ):
-            return BRANCH_RE
-        return DEFAULT_BRANCH_RE_PATTERN
+            else DEFAULT_BRANCH_RE_PATTERN
+        )
+    else:
+        try:
+            compiled = re.compile(raw.strip())
+        except re.error as exc:
+            raise BrokerError(f"Invalid AGENT_BROKER_BRANCH_RE: {raw!r}") from exc
+    if compiled.groups < 1:
+        raise BrokerError(
+            "AGENT_BROKER_BRANCH_RE must capture the issue number in group 1"
+        )
+    return compiled
+
+
+def managed_branch_issue(branch: str) -> int | None:
+    match = get_branch_re().fullmatch(branch)
+    if match is None:
+        return None
     try:
-        return re.compile(raw.strip())
-    except re.error as exc:
-        raise BrokerError(f"Invalid AGENT_BROKER_BRANCH_RE: {raw!r}") from exc
+        issue = int(match.group(1))
+    except (IndexError, TypeError, ValueError) as exc:
+        raise BrokerError(
+            f"Managed branch {branch!r} has an invalid issue-number capture"
+        ) from exc
+    if issue <= 0:
+        raise BrokerError(f"Managed branch {branch!r} has a non-positive issue number")
+    return issue
 
 
 def _init_planning_issue() -> int | None:
@@ -899,18 +920,13 @@ def validate_remote(
         other_issue = None
         other_exclusive: set[str] = set()
         reciprocal = False
-        m = get_branch_re().fullmatch(branch)
-        if m and m.lastindex:
-            try:
-                other_issue = int(m.group(1))
-            except (ValueError, IndexError):
-                other_issue = None
-            if other_issue is not None:
-                other_body = str(gh.issue(other_issue).get("body") or "")
-                other_exclusive, _ = scope(other_body)
-                reciprocal = other_issue in current_exc and req.issue in exceptions(
-                    other_body
-                )
+        other_issue = managed_branch_issue(branch)
+        if other_issue is not None:
+            other_body = str(gh.issue(other_issue).get("body") or "")
+            other_exclusive, _ = scope(other_body)
+            reciprocal = other_issue in current_exc and req.issue in exceptions(
+                other_body
+            )
         collided = req.paths & other_files
         collided |= {p for p in other_files if matches(p, exclusive)}
         collided |= {p for p in req.paths if matches(p, other_exclusive)}
@@ -1049,18 +1065,13 @@ def _validate_scope_and_collisions(
         other_files = gh.pull_files(number)
         other_exclusive: set[str] = set()
         reciprocal = False
-        match = get_branch_re().fullmatch(branch)
-        if match and match.lastindex:
-            try:
-                other_issue = int(match.group(1))
-            except (ValueError, IndexError):
-                other_issue = None
-            if other_issue is not None:
-                other_body = str(gh.issue(other_issue).get("body") or "")
-                other_exclusive, _ = scope(other_body)
-                reciprocal = other_issue in current_exc and issue_number in exceptions(
-                    other_body
-                )
+        other_issue = managed_branch_issue(branch)
+        if other_issue is not None:
+            other_body = str(gh.issue(other_issue).get("body") or "")
+            other_exclusive, _ = scope(other_body)
+            reciprocal = other_issue in current_exc and issue_number in exceptions(
+                other_body
+            )
         collided = paths & other_files
         collided |= {path for path in other_files if matches(path, exclusive)}
         collided |= {path for path in paths if matches(path, other_exclusive)}

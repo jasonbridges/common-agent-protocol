@@ -1139,6 +1139,28 @@ class Tests(unittest.TestCase):
                 broker.get_bot_email(), "legacy-bot@users.noreply.github.com"
             )
 
+    def test_managed_branch_regex_requires_numeric_issue_capture(self):
+        with (
+            unittest.mock.patch.dict(
+                broker.os.environ,
+                {"AGENT_BROKER_BRANCH_RE": r"^task/issue-\d+$"},
+                clear=False,
+            ),
+            self.assertRaises(broker.BrokerError),
+        ):
+            broker.get_branch_re()
+
+        with unittest.mock.patch.dict(
+            broker.os.environ,
+            {"AGENT_BROKER_BRANCH_RE": r"^task/issue-(\w+)$"},
+            clear=False,
+        ):
+            g = FakeGH()
+            g.pulls = [{"number": 10, "head": {"ref": "task/issue-abc"}}]
+            g.pull_file_map[10] = {"other.txt"}
+            with self.assertRaises(broker.BrokerError):
+                broker.validate_remote(g, self.req())
+
     def test_configuration_invalid_values_fail_closed_at_use_or_validation(self):
         with unittest.mock.patch.dict(
             broker.os.environ, {"AGENT_BROKER_BRANCH_RE": "["}, clear=False
