@@ -7,6 +7,7 @@ import json
 import sys
 import unittest
 import unittest.mock
+import zlib
 from pathlib import Path
 from typing import Any
 
@@ -151,6 +152,28 @@ def work_update_payload(**kw: Any) -> dict[str, Any]:
     return p
 
 
+def inline_file(content: bytes, *, compress: bool = False, **kw: Any) -> dict[str, Any]:
+    """Build a file entry carrying content inline instead of as a staged Git blob."""
+    sha = hashlib.sha1(
+        b"blob " + str(len(content)).encode() + b"\0" + content
+    ).hexdigest()
+    data = zlib.compress(content) if compress else content
+    row = {
+        "path": "deploy/manifest.json",
+        "sha": sha,
+        "mode": "100644",
+        "inline": {
+            "encoding": "zlib-base64" if compress else "base64",
+            "data": base64.b64encode(data).decode(),
+        },
+    }
+    row.update(kw)
+    return row
+
+
+MILESTONE = {"number": 1, "title": "Common Agent Protocol Hardening", "state": "open"}
+
+
 class FakeGH:
     def __init__(self):
         self.branch = False
@@ -160,7 +183,9 @@ class FakeGH:
             "state": "open",
             "title": "implementation",
             "body": ISSUE_BODY,
+            "milestone": dict(MILESTONE),
         }
+        self.pr_milestone: int | None = None
         self.planning_row = {
             "number": 377,
             "state": "open",
@@ -172,7 +197,7 @@ class FakeGH:
         self.pull_file_map: dict[int, set[str]] = {}
         self.posts: list[tuple[str, Any]] = []
         self.patches: list[tuple[str, Any]] = []
-        self.milestones: list[dict[str, Any]] = []
+        self.milestones: list[dict[str, Any]] = [dict(MILESTONE)]
         self.comments: dict[int, dict[str, Any]] = {
             7: {
                 "id": 7,
@@ -313,6 +338,10 @@ class FakeGH:
             return {"object": {"sha": data["sha"]}}
         if path.startswith("/pulls/"):
             return {"number": int(path.rsplit("/", 1)[1]), **data}
+        if path == "/issues/99":
+            # PR #99 is a pull request; milestones are set on its issue record.
+            self.pr_milestone = data["milestone"]
+            return {"number": 99, "milestone": {"number": data["milestone"], "title": MILESTONE["title"]}}
         if path.startswith("/issues/"):
             target = int(path.rsplit("/", 1)[1])
             row = self.issue(target)
@@ -321,6 +350,15 @@ class FakeGH:
                 row["milestone"] = self.milestone(int(data["milestone"]))
             return row
         return {"ok": True}
+
+
+class NoStagedBlobGH(FakeGH):
+    """Inline content must never be fetched as a staged blob."""
+
+    def get(self, path, allow_404=False):
+        if path.startswith("/git/blobs/"):
+            raise AssertionError("inline content must not be fetched as a staged blob")
+        return super().get(path, allow_404)
 
 
 class Tests(unittest.TestCase):
@@ -547,6 +585,7 @@ class Tests(unittest.TestCase):
                 "repo": {"full_name": broker.REPO},
             },
             "base": {"ref": "main"},
+            "milestone": dict(MILESTONE),
         }
 
     def test_v2_rejects_unknown_operations_fields_and_wrong_planning_source(self):
@@ -943,6 +982,261 @@ class Tests(unittest.TestCase):
         g, _, cmd = self._resume_fixture()
         g.comment_body += "edited"
         self.assertRaises(broker.BrokerError, broker.validate_resume, g, cmd)
+
+    def test_unmilestoned_or_closed_milestone_issue_is_refused_before_claim(self):
+        for milestone in (None, {"number": 1, "title": "old", "state": "closed"}):
+            with self.subTest(milestone=milestone):
+                g = FakeGH()
+                g.issue_row["milestone"] = milestone
+                r = self.req()
+                self.assertRaisesRegex(
+                    broker.BrokerError, "no open milestone", broker.validate_remote, g, r
+                )
+                self.assertRaisesRegex(
+                    broker.BrokerError, "no open milestone", broker.mutate, g, r, {}
+                )
+                self.assertEqual(g.posts, [])
+                self.assertFalse(g.branch)
+
+    def test_initial_pr_receives_issue_milestone_and_reports_it(self):
+        g = FakeGH()
+        r = self.req()
+        broker.mutate(g, r, broker.materialize_blobs(g, r))
+        self.assertEqual(g.pr_milestone, MILESTONE["number"])
+        success = [
+            data["body"] for path, data in g.posts if path == "/issues/362/comments"
+        ][-1]
+        self.assertIn(f"- Milestone: #{MILESTONE['number']}", success)
+
+    def test_initial_pr_fails_closed_when_milestone_cannot_be_verified(self):
+        g = FakeGH()
+        original_patch = g.patch
+
+        def ignore_milestone(path, data):
+            if path == "/issues/99":
+                return {"number": 99, "milestone": None}
+            return original_patch(path, data)
+
+        g.patch = ignore_milestone
+        r = self.req()
+        self.assertRaisesRegex(
+            broker.BrokerError,
+            "milestone parity",
+            broker.mutate,
+            g,
+            r,
+            broker.materialize_blobs(g, r),
+        )
+        failure = [
+            data["body"] for path, data in g.posts if path == "/issues/362/comments"
+        ][-1]
+        self.assertTrue(failure.startswith("BOT BROKER FAILURE"))
+
+    def test_work_update_restores_milestone_parity_only_when_needed(self):
+        for current, expect_patch in (
+            (None, True),
+            ({"number": 7, "state": "open"}, True),
+            (dict(MILESTONE), False),
+        ):
+            with self.subTest(current=current):
+                g = FakeGH()
+                g.branch = True
+                g.branch_head = "f" * 40
+                pr = self.canonical_pr()
+                pr["milestone"] = current
+                g.pulls = [pr]
+                g.pull_file_map[99] = {"deploy/manifest.json"}
+                cmd = self.v2(work_update_payload(), source_issue=362, gh=g)
+                files = broker._files_for_v2(cmd)
+                broker.mutate_work_update(g, cmd, broker.materialize_file_set(g, files))
+                patched = any(path == "/issues/99" for path, _ in g.patches)
+                self.assertEqual(patched, expect_patch)
+                if expect_patch:
+                    self.assertEqual(g.pr_milestone, MILESTONE["number"])
+
+    def test_resume_created_pr_receives_issue_milestone(self):
+        g, req, cmd = self._resume_fixture()
+        broker.mutate_resume(g, cmd, broker.materialize_blobs(g, req))
+        self.assertEqual(g.pr_milestone, MILESTONE["number"])
+
+    def _hidden_event(self, p):
+        e = event(p)
+        raw = json.dumps(p, separators=(",", ":")).encode()
+        encoded = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+        e["comment"]["body"] = (
+            broker.PREFIX + broker.HIDDEN_PREFIX + encoded + broker.HIDDEN_SUFFIX
+        )
+        return e
+
+    def test_hidden_envelope_accepts_only_one_allowlisted_attribution_footer(self):
+        e = self._hidden_event(payload())
+        body = e["comment"]["body"]
+        session_footer = (
+            "\n\n---\n_Generated by [Claude Code]"
+            "(https://claude.ai/code/session_01FxRrsrzabsWpNzm2w3tKxR)_"
+        )
+        for suffix in (
+            broker.ATTRIBUTION_FOOTER,
+            broker.ATTRIBUTION_FOOTER + "\n",
+            session_footer,
+            session_footer + "\n",
+        ):
+            with self.subTest(accepted=suffix):
+                e["comment"]["body"] = body + suffix
+                req = broker.from_event(e)
+                self.assertEqual(req.issue, 362)
+                self.assertEqual(
+                    req.comment_digest,
+                    hashlib.sha256((body + suffix).encode()).hexdigest(),
+                )
+        for suffix in (
+            broker.ATTRIBUTION_FOOTER + "x",
+            broker.ATTRIBUTION_FOOTER + "\n\n",
+            broker.ATTRIBUTION_FOOTER + broker.ATTRIBUTION_FOOTER,
+            "\nextra",
+            "\n\n---\n_Generated by [Claude Code](https://attacker.example)_",
+        ):
+            with self.subTest(rejected=suffix):
+                e["comment"]["body"] = body + suffix
+                self.assertRaises(broker.BrokerError, broker.from_event, e)
+
+    def test_raw_json_command_does_not_accept_attribution_footer(self):
+        e = event()
+        e["comment"]["body"] += broker.ATTRIBUTION_FOOTER
+        self.assertRaises(broker.BrokerError, broker.from_event, e)
+
+    def test_inline_content_replaces_staged_blob_without_changing_request_identity(self):
+        staged = self.req()
+        for compress in (False, True):
+            with self.subTest(compress=compress):
+                e = event(payload(files=[inline_file(TEST_CONTENT, compress=compress)]))
+                inline = broker.from_event(e)
+                self.assertEqual(inline.files, staged.files)
+                self.assertEqual(inline.files[0].inline, TEST_CONTENT)
+                self.assertEqual(
+                    broker.request_sha256(inline), broker.request_sha256(staged)
+                )
+                g = NoStagedBlobGH()
+                g.comment_body = e["comment"]["body"]
+                materialized = broker.materialize_blobs(g, inline)
+                self.assertEqual(
+                    base64.b64decode(
+                        materialized["deploy/manifest.json"]["content_b64"]
+                    ),
+                    TEST_CONTENT,
+                )
+                number, _ = broker.mutate(g, inline, materialized)
+                self.assertEqual(number, 99)
+
+    def test_work_update_accepts_inline_zlib_content(self):
+        g = NoStagedBlobGH()
+        g.branch = True
+        g.branch_head = "f" * 40
+        g.pulls = [self.canonical_pr()]
+        g.pull_file_map[99] = {"deploy/manifest.json"}
+        cmd = self.v2(
+            work_update_payload(files=[inline_file(TEST_CONTENT, compress=True)]),
+            source_issue=362,
+            gh=g,
+        )
+        files = broker._files_for_v2(cmd)
+        sha, number = broker.mutate_work_update(
+            g, cmd, broker.materialize_file_set(g, files)
+        )
+        self.assertEqual((sha, number), ("e" * 40, 99))
+
+    def test_inline_content_integrity_and_bounds_fail_closed(self):
+        def encoded(data: bytes) -> str:
+            return base64.b64encode(data).decode()
+
+        compressed = zlib.compress(TEST_CONTENT)
+        cases = (
+            (
+                inline_file(b"other", sha=TEST_SHA),
+                "integrity failure",
+            ),
+            (
+                inline_file(
+                    TEST_CONTENT,
+                    inline={"encoding": "base64", "data": "%%%"},
+                ),
+                "Malformed",
+            ),
+            (
+                inline_file(
+                    TEST_CONTENT,
+                    inline={"encoding": "gzip", "data": "AA=="},
+                ),
+                "Invalid",
+            ),
+            (inline_file(TEST_CONTENT, sha=None), "cannot carry inline content"),
+            (
+                inline_file(
+                    TEST_CONTENT,
+                    inline={
+                        "encoding": "zlib-base64",
+                        "data": encoded(compressed[:-3]),
+                    },
+                ),
+                "Malformed",
+            ),
+        )
+        for row, message in cases:
+            with self.subTest(message=message):
+                self.assertRaisesRegex(
+                    broker.BrokerError, message, self.req, payload(files=[row])
+                )
+        oversized = {
+            "encoding": "base64",
+            "data": encoded(b"\0" * (broker.MAX_BLOB + 1)),
+        }
+        self.assertRaisesRegex(
+            broker.BrokerError,
+            "oversized",
+            broker._inline_content,
+            oversized,
+            "x",
+            TEST_SHA,
+        )
+
+    def test_scope_accepts_heading_forms_and_stops_at_other_headings(self):
+        body = (
+            "## Scope ownership\n\n### Exclusive\n\n- `a/**`\n- `b.py`\n\n"
+            "### Shared\n\n- `c.md`\n\n### Notes\n\n- `not/scope.txt`\n\n"
+            "## Validation\n\n- `ignored/**`\n"
+        )
+        self.assertEqual(broker.scope(body), ({"a/**", "b.py"}, {"c.md"}))
+        level_two = (
+            "## Scope ownership\n\n## Exclusive\n\n- `a/**`\n\n"
+            "## Shared\n\n- none\n\n## Validation\n\n- `x/**`\n"
+        )
+        self.assertEqual(broker.scope(level_two), ({"a/**"}, set()))
+
+    def test_heading_form_exclusive_scope_participates_in_collision_detection(self):
+        g = FakeGH()
+        g.pulls = [
+            {
+                "number": 10,
+                "head": {"ref": "work/issue-10"},
+                "base": {"ref": "main"},
+            }
+        ]
+        g.pull_file_map[10] = {"other.txt"}
+        g.other_issues[10] = {
+            "number": 10,
+            "state": "open",
+            "body": (
+                "## Scope ownership\n\n### Exclusive\n\n- `deploy/**`\n\n"
+                "### Shared\n\n- none\n"
+            ),
+        }
+        self.assertRaisesRegex(
+            broker.BrokerError,
+            "Path collision with PR #10",
+            broker.validate_remote,
+            g,
+            self.req(),
+        )
 
     def test_workflow_concurrency_is_job_scoped_and_preserves_command_groups(self):
         wf_path = ROOT / ".github/workflows/agent-command-broker.yml"

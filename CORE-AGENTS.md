@@ -224,7 +224,8 @@ Remote agents lacking access to `~/.config/gh-app/agent-env.sh` must not use per
 
 Where deployed, remote agents interact via the declarative GitHub App Command Broker using immutable signed/hidden comment envelopes:
 - **Planning Commands:** Submitted to planning queue issues (`plan.create_issue`, `plan.assign_milestone`).
-- **Implementation Commands:** Submit staged, content-addressed Git blobs to atomically claim the task branch, create bot-authored commits, open canonical PRs, and request review.
+- **Implementation Commands:** Submit content-addressed Git blobs to atomically claim the task branch, create bot-authored commits, open canonical PRs, and request review. A remote session that cannot pre-stage blobs may carry bounded `base64` or `zlib-base64` inline content instead; the decoded bytes must hash to the declared Git blob SHA, and deletions cannot carry inline content.
+- **Attribution Footer:** A hidden envelope normally consumes the remainder of the comment. The broker may allow exactly one documented remote-agent attribution footer after it, including the supported product-link or session-link form; any other trailing bytes fail closed. The source-comment digest still covers the complete raw body.
 - **Iterative Updates:** Follow-up commits must use atomic updates referencing the expected parent commit SHA (`expected_head_sha`).
 - **Failure Recovery:** If a broker transaction fails after branch creation, recover via explicit provenance verification (`work.resume`) rather than recreating or force-pushing.
 
