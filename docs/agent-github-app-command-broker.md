@@ -214,7 +214,7 @@ The broker does not blindly retry issue creation, milestone creation, PR creatio
 6. Re-read the exact current `main` SHA immediately before command submission.
 7. Encode the JSON request as the hidden base64url envelope and post one `/agent-commit-v1` command to the implementation issue with that `main` SHA and the blob references.
 8. Watch **Agent GitHub App Command Broker**. A successful run creates the canonical branch/claim, commit, PR, milestone assignment, and maintainer review request as the configured bot identity.
-9. Verify the PR author and commit author/committer identity, requested reviewer, issue/PR milestone parity, exact changed paths, and exact-head CI before review or merge.
+9. Verify the PR author and commit author/committer identity, requested reviewer, issue/PR milestone parity and exact changed paths before review, and green exact-head CI before merge. Review may begin while CI is still running (CORE §9.5).
 
 The GitHub connection used by the remote agent does not become the authoring identity in this flow. Its job ends after staging blobs and submitting the owner-authorized command. During trusted preflight, the broker reads each bounded staged blob, verifies its canonical Git SHA, and materializes only the verified bytes into the private same-job request file (mode `0600`). After minting the short-lived App token, execution recreates those bytes as Git blobs under `jasonbridges-agent`, requires GitHub to return the exact requested SHA, revalidates repository state, and only then creates the canonical claim. Candidate bytes are never checked out, imported, executed, or logged while the App credential is present.
 
@@ -269,7 +269,7 @@ The installation token itself is intentionally not rotated or stored: `actions/c
 
 ## Operational verification
 
-For every broker-created PR, verify all of the following before review or merge:
+For every broker-created PR, verify all of the following before merge (all but the CI item may also be checked before review, which may begin while CI is still running):
 
 - `work/issue-N` is the authoritative canonical claim and was created only once;
 - claim comment actor is `jasonbridges-agent[bot]`;

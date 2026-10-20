@@ -121,7 +121,7 @@ Post or update GitHub status when any of these occurs:
 - **Scope or Design Change:** Update the issue body and scope declarations before editing files outside initial scope; record new dependencies or ADR decisions when known.
 - **Material Blocker or RCA:** Record the concrete blocker, failure logs, workflow run/job IDs, affected dependency, safe failure mode, and next unblocking action on the issue or PR. Do not leave the only root cause analysis in chat.
 - **PR Opened or Materially Revised:** Keep the PR body current with changed paths, verification commands, operational rollback, and security/execution-policy impact. A PR body is a living summary, not a creation-time snapshot.
-- **Ready for Review:** Only mark ready after criteria, local tests, and exact-head CI gates pass.
+- **Ready for Review:** Mark ready once acceptance criteria, local tests/gates and milestone parity pass; do not wait for exact-head CI to finish. Exact-head CI gates merge (§9.5), not review.
 - **Blocked after Review / CI:** Return the PR to draft; document whether the blocker is owned by this issue or an upstream dependency.
 - **Merge / Completion:** Ensure the canonical issue is closed by the PR (`Closes #NNN`) and verify follow-up tasks are represented in the milestone roadmap.
 
@@ -149,15 +149,15 @@ GitHub issues are the work queue and milestone source of truth.
 2. **Promotion to Ready for Review:** An agent must not leave a completed task sitting in Draft status. Once:
    - all task acceptance criteria are satisfied and checked off in the PR and tracking issue;
    - repository validation passes;
-   - local formatting, static analysis, and tests pass;
-   - milestone parity between issue and PR is verified; and
-   - canonical exact-head CI workflows are green;
-   the implementing agent **MUST** mark the PR ready for review:
+   - local formatting, static analysis, and tests pass; and
+   - milestone parity between issue and PR is verified;
+   the implementing agent **MUST** mark the PR ready for review, without waiting for exact-head CI to finish:
    ```bash
    gh pr ready <PR-NUMBER>
    ```
 3. **Reviewer Request:** Request `jasonbridges` as reviewer when the PR is bot-authored, and verify via `gh pr view <n> --json reviewRequests` that the request exists.
 4. **Issue Synchronization:** Update the associated task issue body or comment with `Status: review`.
+5. **Merge Gate (Exact-Head CI):** Canonical exact-head CI workflows must be green on the exact head being merged. Review and maintainer handoff may proceed while CI is still running, but no one may treat pending, cancelled, skipped-where-required or truncated CI as passed. If exact-head CI fails, return the PR to draft (§7 "Blocked after Review / CI"); a fix produces a new head that needs fresh review.
 
 ---
 
@@ -213,6 +213,7 @@ A task or issue implementation is complete only when:
 - No unresolved TODO introduced by the change is required for correctness.
 - The PR documents rollback and operational notes explicitly.
 - The pull request is marked ready for review (`gh pr ready <PR-NUMBER>`).
+- Canonical exact-head CI is green on the exact head before it is merged (§9.5).
 
 Do not mark an issue complete or a PR ready for review merely because code compiles without syntax errors.
 
