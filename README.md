@@ -13,6 +13,8 @@ This repository defines project-agnostic agent operating rules:
 - Milestone tracking and issue/PR parity
 - Pull request lifecycle and review readiness verification
 - Agent identities (`agent-env.sh`) and remote command broker envelopes
+- Shared [code-quality, language, and testing guides](docs/code-quality/README.md) (including [Rust](docs/code-quality/rust.md), [C/C++](docs/code-quality/cpp.md), Python, Go, Shell, Bazel, and [test design](docs/testing/test-design.md))
+- Reusable [substantive PR review playbook template](templates/REVIEWERS.md)
 - Forbidden shortcuts and safe ambiguity fallbacks
 - Break-glass emergency procedures
 
