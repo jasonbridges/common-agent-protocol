@@ -27,8 +27,9 @@ To prevent context exhaustion, token waste, and hallucinated designs, agents **m
 2. The assigned GitHub issue / task description and its full comment history
 3. Referenced implementation plans, designs, specifications, and schemas
 4. Referenced ADRs and security policies
-5. Confirm all declared dependencies are complete on `main`
-6. Only then inspect implementation packages and tests touched by the planned change
+5. Relevant engineering guides in [`.agents/docs/code-quality/README.md`](docs/code-quality/README.md) and [`.agents/docs/testing/test-design.md`](docs/testing/test-design.md)
+6. Confirm all declared dependencies are complete on `main`
+7. Only then inspect implementation packages and tests touched by the planned change
 
 The issue/task should contain enough authoritative references that an agent does not have to invent architecture. If an architectural decision is missing, resolve the design artifact first.
 
